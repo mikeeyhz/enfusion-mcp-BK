@@ -3,10 +3,10 @@
  *
  * Executes arbitrary Workbench menu actions by path.
  * menuPath is comma-separated, e.g. "Edit,Select All" or "Tools,Reload Scripts"
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_ExecuteAction"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_ExecuteAction"
  */
 
-class EMCP_WB_ExecuteActionRequest : JsonApiStruct
+class EMCP_WB_ExecuteActionRequest : EMCP_WB_ProjectRequest
 {
 	string menuPath;
 	//! Which module owns the menu. Empty = WorldEditor, preserving old behaviour.
@@ -40,7 +40,7 @@ class EMCP_WB_ExecuteActionResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_ExecuteAction : NetApiHandler
+class EMCP_WB_Guarded_ExecuteAction : NetApiHandler
 {
 	//------------------------------------------------------------------------------------------------
 	//! GetModule takes a TypeName, so a name-to-module mapping has to be spelled out.
@@ -72,6 +72,10 @@ class EMCP_WB_ExecuteAction : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_ExecuteActionRequest req = EMCP_WB_ExecuteActionRequest.Cast(request);
 		EMCP_WB_ExecuteActionResponse resp = new EMCP_WB_ExecuteActionResponse();
 		resp.menuPath = req.menuPath;

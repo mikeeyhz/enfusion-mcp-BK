@@ -26,7 +26,7 @@ const allowWrite = process.env.ENFUSION_TUNING_READONLY !== "1";
 // what happened.
 const postWrite = process.env.ENFUSION_TUNING_POST_WRITE || "rebuild";
 
-const wbClient = new WorkbenchClient(config.workbenchHost, config.workbenchPort, config);
+const wbClient = new WorkbenchClient(config.workbenchHost, config.workbenchPort, { ...config, defaultMod: addonName });
 
 // skipAutoLaunch: the tuner must never spawn Workbench just because a value changed.
 const CALL_OPTS = { skipAutoLaunch: true, timeout: 8000 } as const;

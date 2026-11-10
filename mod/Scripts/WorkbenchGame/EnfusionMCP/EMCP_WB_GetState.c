@@ -3,10 +3,10 @@
  *
  * Returns a comprehensive snapshot of the current Workbench/WorldEditor state.
  * No request parameters needed.
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_GetState"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_GetState"
  */
 
-class EMCP_WB_GetStateRequest : JsonApiStruct
+class EMCP_WB_GetStateRequest : EMCP_WB_ProjectRequest
 {
 	void EMCP_WB_GetStateRequest()
 	{
@@ -55,7 +55,7 @@ class EMCP_WB_GetStateResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_GetState : NetApiHandler
+class EMCP_WB_Guarded_GetState : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -64,6 +64,10 @@ class EMCP_WB_GetState : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_GetStateResponse resp = new EMCP_WB_GetStateResponse();
 
 		WorldEditor worldEditor = Workbench.GetModule(WorldEditor);

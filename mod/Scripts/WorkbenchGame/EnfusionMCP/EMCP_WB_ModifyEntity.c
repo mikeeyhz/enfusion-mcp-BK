@@ -3,10 +3,10 @@
  *
  * Actions: move, rotate, rename, setProperty, clearProperty, getProperty, listProperties,
  *          listArrayItems, addArrayItem, removeArrayItem, setObjectClass
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_ModifyEntity"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_ModifyEntity"
  */
 
-class EMCP_WB_ModifyEntityRequest : JsonApiStruct
+class EMCP_WB_ModifyEntityRequest : EMCP_WB_ProjectRequest
 {
 	string name;
 	string action;
@@ -69,7 +69,7 @@ class EMCP_WB_ModifyEntityResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_ModifyEntity : NetApiHandler
+class EMCP_WB_Guarded_ModifyEntity : NetApiHandler
 {
 	//------------------------------------------------------------------------------------------------
 	static vector ParseVectorString(string str)
@@ -150,6 +150,10 @@ class EMCP_WB_ModifyEntity : NetApiHandler
 	//------------------------------------------------------------------------------------------------
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_ModifyEntityRequest req = EMCP_WB_ModifyEntityRequest.Cast(request);
 		EMCP_WB_ModifyEntityResponse resp = new EMCP_WB_ModifyEntityResponse();
 		resp.action = req.action;

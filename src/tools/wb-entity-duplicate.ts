@@ -5,6 +5,7 @@ import {
   writeFileSync,
   mkdirSync,
   existsSync,
+  realpathSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Config } from "../config.js";
@@ -51,7 +52,7 @@ export function registerWbEntityDuplicate(
           .optional()
           .describe(
             "Addon folder name under ENFUSION_PROJECT_PATH (e.g. 'MyMod'). " +
-            "If omitted, the first addon found in the project path is used."
+            "If omitted, use the verified active addon."
           ),
         replaceInScene: z
           .boolean()
@@ -62,28 +63,21 @@ export function registerWbEntityDuplicate(
           ),
       },
     },
-    async ({ entityName, destPath, modName, replaceInScene }) => {
+    async ({ entityName, destPath, modName, replaceInScene }) => client.withProject(async () => {
       const modeErr = requireEditMode(client, "duplicate entity");
       if (modeErr) {
         return { content: [{ type: "text" as const, text: modeErr + formatConnectionStatus(client) }] };
       }
 
-      // Resolve addon directory
-      const addonDir = resolveAddonDir(config.projectPath, modName ?? config.defaultMod);
-      if (!addonDir) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Could not find addon directory. ` +
-                (modName
-                  ? `'${modName}' not found under ${config.projectPath}`
-                  : `No addons found under ${config.projectPath}`) +
-                `. Provide modName matching the addon folder name.`,
-            },
-          ],
-          isError: true,
-        };
+      const addonDir = dirname(client.expectedProjectFile());
+      if (modName) {
+        const requested = resolveAddonDir(config.projectPath, modName);
+        if (!requested || realpathSync.native(requested) !== addonDir) {
+          return {
+            content: [{ type: "text" as const, text: "modName must match the verified Workbench project." }],
+            isError: true,
+          };
+        }
       }
 
       // Check destination doesn't already exist
@@ -142,6 +136,7 @@ export function registerWbEntityDuplicate(
 
       try {
         const content = readFileSync(sourceFile, "utf-8");
+        await client.verifyProject();
         mkdirSync(dirname(absDestPath), { recursive: true });
         writeFileSync(absDestPath, content, "utf-8");
       } catch (e) {
@@ -282,7 +277,7 @@ export function registerWbEntityDuplicate(
           },
         ],
       };
-    }
+    })
   );
 }
 

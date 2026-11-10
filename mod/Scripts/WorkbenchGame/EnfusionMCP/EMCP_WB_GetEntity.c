@@ -2,10 +2,10 @@
  * EMCP_WB_GetEntity.c - Entity detail retrieval
  *
  * Finds an entity by name or index and returns detailed information.
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_GetEntity"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_GetEntity"
  */
 
-class EMCP_WB_GetEntityRequest : JsonApiStruct
+class EMCP_WB_GetEntityRequest : EMCP_WB_ProjectRequest
 {
 	string name;
 	int index;
@@ -80,7 +80,7 @@ class EMCP_WB_GetEntityResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_GetEntity : NetApiHandler
+class EMCP_WB_Guarded_GetEntity : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -89,6 +89,10 @@ class EMCP_WB_GetEntity : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_GetEntityRequest req = EMCP_WB_GetEntityRequest.Cast(request);
 		EMCP_WB_GetEntityResponse resp = new EMCP_WB_GetEntityResponse();
 

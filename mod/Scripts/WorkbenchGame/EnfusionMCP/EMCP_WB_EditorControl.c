@@ -2,10 +2,10 @@
  * EMCP_WB_EditorControl.c - Editor mode control handler
  *
  * Supports actions: play, stop, save, undo, redo, openResource
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_EditorControl"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_EditorControl"
  */
 
-class EMCP_WB_EditorControlRequest : JsonApiStruct
+class EMCP_WB_EditorControlRequest : EMCP_WB_ProjectRequest
 {
 	string action;
 	bool debugMode;
@@ -35,7 +35,7 @@ class EMCP_WB_EditorControlResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_EditorControl : NetApiHandler
+class EMCP_WB_Guarded_EditorControl : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -44,6 +44,10 @@ class EMCP_WB_EditorControl : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_EditorControlRequest req = EMCP_WB_EditorControlRequest.Cast(request);
 		EMCP_WB_EditorControlResponse resp = new EMCP_WB_EditorControlResponse();
 		resp.action = req.action;

@@ -193,7 +193,7 @@ export function registerScenarioTools(server: McpServer, client: WorkbenchClient
           .describe("(base) Number of ambient patrol spawnpoints to place around the base (0-6, default 2)."),
       },
     },
-    async (args) => {
+    async (args) => client.withProject(async () => {
       const { type } = args;
 
       if (type === "objective") {
@@ -472,6 +472,6 @@ export function registerScenarioTools(server: McpServer, client: WorkbenchClient
         content: [{ type: "text" as const, text: `**scenario_create failed**\nUnknown type.` }],
         isError: true,
       };
-    }
+    })
   );
 }

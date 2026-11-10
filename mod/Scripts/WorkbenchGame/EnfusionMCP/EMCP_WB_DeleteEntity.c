@@ -5,10 +5,10 @@
  * Uses the confirmed DeleteEntity method from the 84-method WorldEditorAPI.
  * Falls back to selection + CutSelectedEntities if direct delete is unavailable.
  *
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_DeleteEntity"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_DeleteEntity"
  */
 
-class EMCP_WB_DeleteEntityRequest : JsonApiStruct
+class EMCP_WB_DeleteEntityRequest : EMCP_WB_ProjectRequest
 {
 	string name;
 
@@ -34,7 +34,7 @@ class EMCP_WB_DeleteEntityResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_DeleteEntity : NetApiHandler
+class EMCP_WB_Guarded_DeleteEntity : NetApiHandler
 {
 	//------------------------------------------------------------------------------------------------
 	static IEntitySource FindEntityByName(WorldEditorAPI api, string name)
@@ -58,6 +58,10 @@ class EMCP_WB_DeleteEntity : NetApiHandler
 	//------------------------------------------------------------------------------------------------
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_DeleteEntityRequest req = EMCP_WB_DeleteEntityRequest.Cast(request);
 		EMCP_WB_DeleteEntityResponse resp = new EMCP_WB_DeleteEntityResponse();
 

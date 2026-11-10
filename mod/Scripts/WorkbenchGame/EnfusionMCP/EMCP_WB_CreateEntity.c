@@ -3,7 +3,7 @@
  *
  * Creates a new entity from a prefab resource path at the specified position.
  * Position and rotation are passed as "x y z" strings.
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_CreateEntity"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_CreateEntity"
  *
  * NOTE: WorldEditorAPI.CreateEntity() is confirmed to exist in the 84-method API
  * (used by GameModeSetupConfigEntry and SCR_PrefabEditingPlugin internally).
@@ -11,7 +11,7 @@
  *                                              IEntitySource parent, vector pos, vector angles)
  */
 
-class EMCP_WB_CreateEntityRequest : JsonApiStruct
+class EMCP_WB_CreateEntityRequest : EMCP_WB_ProjectRequest
 {
 	string prefab;
 	string position;
@@ -48,7 +48,7 @@ class EMCP_WB_CreateEntityResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_CreateEntity : NetApiHandler
+class EMCP_WB_Guarded_CreateEntity : NetApiHandler
 {
 	//------------------------------------------------------------------------------------------------
 	static vector ParseVectorString(string str)
@@ -77,6 +77,10 @@ class EMCP_WB_CreateEntity : NetApiHandler
 	//------------------------------------------------------------------------------------------------
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_CreateEntityRequest req = EMCP_WB_CreateEntityRequest.Cast(request);
 		EMCP_WB_CreateEntityResponse resp = new EMCP_WB_CreateEntityResponse();
 

@@ -54,6 +54,8 @@ Restart Claude Desktop. Verify with `/mcp`.
 
 The live Workbench tools (`wb_*`) require handler scripts running inside Workbench. These ship with the package in `mod/Scripts/WorkbenchGame/EnfusionMCP/` and are installed automatically when Claude launches Workbench via `wb_launch`.
 
+Pass the exact `.gproj` path to `wb_launch` or `wb_projects` with `action: "open"` before using live tools. A configured `ENFUSION_DEFAULT_MOD` can supply the target when its addon directory contains exactly one `.gproj`. The bridge checks the project file before dispatch and again inside Workbench. To switch projects, save and close the current Workbench window, then launch the other `.gproj`. A session started with an older bridge or without a verifiable `-gproj` must be relaunched through `wb_launch`.
+
 ## Usage
 
 Just ask Claude to make a mod:
@@ -118,7 +120,7 @@ Control a running Workbench instance over TCP. Requires the handler scripts inst
 
 | Tool | What it does |
 |------|-------------|
-| `wb_launch` | Start Workbench if not running, wait for NET API |
+| `wb_launch` | Start Workbench for a specific `.gproj` and verify that project is active |
 | `wb_connect` | Test connection to Workbench |
 | `wb_state` | Full state snapshot — mode, world, entity count, selection |
 | `wb_play` | Switch to game mode (Play in Editor) |

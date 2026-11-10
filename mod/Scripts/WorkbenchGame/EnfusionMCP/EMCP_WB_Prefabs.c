@@ -2,10 +2,10 @@
  * EMCP_WB_Prefabs.c - Prefab operations handler
  *
  * Actions: createTemplate, save, getAncestor
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Prefabs"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_Prefabs"
  */
 
-class EMCP_WB_PrefabsRequest : JsonApiStruct
+class EMCP_WB_PrefabsRequest : EMCP_WB_ProjectRequest
 {
 	string action;
 	string entityName;
@@ -39,7 +39,7 @@ class EMCP_WB_PrefabsResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_Prefabs : NetApiHandler
+class EMCP_WB_Guarded_Prefabs : NetApiHandler
 {
 	//------------------------------------------------------------------------------------------------
 	static IEntitySource FindEntityByName(WorldEditorAPI api, string name)
@@ -63,6 +63,10 @@ class EMCP_WB_Prefabs : NetApiHandler
 	//------------------------------------------------------------------------------------------------
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_PrefabsRequest req = EMCP_WB_PrefabsRequest.Cast(request);
 		EMCP_WB_PrefabsResponse resp = new EMCP_WB_PrefabsResponse();
 		resp.action = req.action;

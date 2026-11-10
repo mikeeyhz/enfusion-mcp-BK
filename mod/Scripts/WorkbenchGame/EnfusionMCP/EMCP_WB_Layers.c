@@ -5,10 +5,10 @@
  * Layer operations in WorldEditorAPI are limited in the public API.
  * Layers are identified by IDs from IEntitySource.GetLayerID().
  *
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Layers"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_Layers"
  */
 
-class EMCP_WB_LayersRequest : JsonApiStruct
+class EMCP_WB_LayersRequest : EMCP_WB_ProjectRequest
 {
 	string action;
 	int subScene;
@@ -76,7 +76,7 @@ class EMCP_WB_LayersResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_Layers : NetApiHandler
+class EMCP_WB_Guarded_Layers : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -85,6 +85,10 @@ class EMCP_WB_Layers : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_LayersRequest req = EMCP_WB_LayersRequest.Cast(request);
 		EMCP_WB_LayersResponse resp = new EMCP_WB_LayersResponse();
 		resp.action = req.action;

@@ -2,10 +2,10 @@
  * EMCP_WB_Terrain.c - Terrain operations handler
  *
  * Actions: getHeight, getBounds
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Terrain"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_Terrain"
  */
 
-class EMCP_WB_TerrainRequest : JsonApiStruct
+class EMCP_WB_TerrainRequest : EMCP_WB_ProjectRequest
 {
 	string action;
 	string x;
@@ -39,7 +39,7 @@ class EMCP_WB_TerrainResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_Terrain : NetApiHandler
+class EMCP_WB_Guarded_Terrain : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -48,6 +48,10 @@ class EMCP_WB_Terrain : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_TerrainRequest req = EMCP_WB_TerrainRequest.Cast(request);
 		EMCP_WB_TerrainResponse resp = new EMCP_WB_TerrainResponse();
 		resp.action = req.action;

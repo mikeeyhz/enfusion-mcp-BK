@@ -3,10 +3,10 @@
  *
  * Returns the position of the current Workbench viewport camera using
  * BaseWorld.GetCurrentCamera(out vector mat[4]).
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_GetCameraPos"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_GetCameraPos"
  */
 
-class EMCP_WB_GetCameraPosRequest : JsonApiStruct
+class EMCP_WB_GetCameraPosRequest : EMCP_WB_ProjectRequest
 {
 	void EMCP_WB_GetCameraPosRequest()
 	{
@@ -28,7 +28,7 @@ class EMCP_WB_GetCameraPosResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_GetCameraPos : NetApiHandler
+class EMCP_WB_Guarded_GetCameraPos : NetApiHandler
 {
 	//------------------------------------------------------------------------------------------------
 	override JsonApiStruct GetRequest()
@@ -39,6 +39,10 @@ class EMCP_WB_GetCameraPos : NetApiHandler
 	//------------------------------------------------------------------------------------------------
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_GetCameraPosResponse resp = new EMCP_WB_GetCameraPosResponse();
 
 		WorldEditor worldEditor = Workbench.GetModule(WorldEditor);

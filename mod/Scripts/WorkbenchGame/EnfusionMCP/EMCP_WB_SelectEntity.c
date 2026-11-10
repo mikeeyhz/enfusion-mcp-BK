@@ -8,10 +8,10 @@
  * "clear" uses ClearEntitySelection.
  * "getSelected" iterates GetSelectedEntity.
  *
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_SelectEntity"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_SelectEntity"
  */
 
-class EMCP_WB_SelectEntityRequest : JsonApiStruct
+class EMCP_WB_SelectEntityRequest : EMCP_WB_ProjectRequest
 {
 	string action;
 	string name;
@@ -62,7 +62,7 @@ class EMCP_WB_SelectEntityResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_SelectEntity : NetApiHandler
+class EMCP_WB_Guarded_SelectEntity : NetApiHandler
 {
 	//------------------------------------------------------------------------------------------------
 	static IEntitySource FindEntityByName(WorldEditorAPI api, string name)
@@ -86,6 +86,10 @@ class EMCP_WB_SelectEntity : NetApiHandler
 	//------------------------------------------------------------------------------------------------
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_SelectEntityRequest req = EMCP_WB_SelectEntityRequest.Cast(request);
 		EMCP_WB_SelectEntityResponse resp = new EMCP_WB_SelectEntityResponse();
 		resp.action = req.action;

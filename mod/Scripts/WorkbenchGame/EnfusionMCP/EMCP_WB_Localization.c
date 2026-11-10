@@ -3,10 +3,10 @@
  *
  * Actions: insert, delete, modify, getTable, listLanguages
  * Uses the LocalizationEditor Workbench module.
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Localization"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_Localization"
  */
 
-class EMCP_WB_LocalizationRequest : JsonApiStruct
+class EMCP_WB_LocalizationRequest : EMCP_WB_ProjectRequest
 {
 	string action;
 	string itemId;
@@ -81,7 +81,7 @@ class EMCP_WB_LocalizationResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_Localization : NetApiHandler
+class EMCP_WB_Guarded_Localization : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -90,6 +90,10 @@ class EMCP_WB_Localization : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_LocalizationRequest req = EMCP_WB_LocalizationRequest.Cast(request);
 		EMCP_WB_LocalizationResponse resp = new EMCP_WB_LocalizationResponse();
 		resp.action = req.action;

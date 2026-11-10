@@ -2,10 +2,10 @@
  * EMCP_WB_Reload.c - Script and plugin reload handler
  *
  * Triggers script compilation via ScriptEditor module.
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Reload"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_Reload"
  */
 
-class EMCP_WB_ReloadRequest : JsonApiStruct
+class EMCP_WB_ReloadRequest : EMCP_WB_ProjectRequest
 {
 	string target;
 
@@ -27,7 +27,7 @@ class EMCP_WB_ReloadResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_Reload : NetApiHandler
+class EMCP_WB_Guarded_Reload : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -36,6 +36,10 @@ class EMCP_WB_Reload : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_ReloadRequest req = EMCP_WB_ReloadRequest.Cast(request);
 		EMCP_WB_ReloadResponse resp = new EMCP_WB_ReloadResponse();
 

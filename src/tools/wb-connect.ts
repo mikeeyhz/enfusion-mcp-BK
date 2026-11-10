@@ -31,6 +31,7 @@ export function registerWbConnect(server: McpServer, client: WorkbenchClient): v
         const lines: string[] = [];
         lines.push("**Workbench Connected**\n");
         lines.push(`- **Status:** Connected`);
+        if (details.projectFile) lines.push("- **Active project:** " + details.projectFile);
         if (details.mode) lines.push(`- **Mode:** ${details.mode}`);
         if (details.message) lines.push(`- **Info:** ${details.message}`);
 

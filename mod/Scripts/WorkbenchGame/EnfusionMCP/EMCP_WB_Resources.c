@@ -3,10 +3,10 @@
  *
  * Actions: register, rebuild, open, browse
  * Uses the ResourceManager Workbench module.
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Resources"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_Resources"
  */
 
-class EMCP_WB_ResourcesRequest : JsonApiStruct
+class EMCP_WB_ResourcesRequest : EMCP_WB_ProjectRequest
 {
 	string action;
 	string path;
@@ -65,7 +65,7 @@ class EMCP_WB_ResourcesResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_Resources : NetApiHandler
+class EMCP_WB_Guarded_Resources : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -74,6 +74,10 @@ class EMCP_WB_Resources : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_ResourcesRequest req = EMCP_WB_ResourcesRequest.Cast(request);
 		EMCP_WB_ResourcesResponse resp = new EMCP_WB_ResourcesResponse();
 		resp.action = req.action;

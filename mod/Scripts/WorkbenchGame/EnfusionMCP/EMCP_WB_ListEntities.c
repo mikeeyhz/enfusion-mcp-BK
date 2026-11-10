@@ -3,10 +3,10 @@
  *
  * Lists editor entities with offset/limit pagination.
  * Uses OnPack() to build JSON array dynamically via StartArray/EndArray.
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_ListEntities"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_ListEntities"
  */
 
-class EMCP_WB_ListEntitiesRequest : JsonApiStruct
+class EMCP_WB_ListEntitiesRequest : EMCP_WB_ProjectRequest
 {
 	int offset;
 	int limit;
@@ -61,7 +61,7 @@ class EMCP_WB_ListEntitiesResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_ListEntities : NetApiHandler
+class EMCP_WB_Guarded_ListEntities : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -70,6 +70,10 @@ class EMCP_WB_ListEntities : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_ListEntitiesRequest req = EMCP_WB_ListEntitiesRequest.Cast(request);
 		EMCP_WB_ListEntitiesResponse resp = new EMCP_WB_ListEntitiesResponse();
 

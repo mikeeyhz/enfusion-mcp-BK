@@ -2,10 +2,10 @@
  * EMCP_WB_Components.c - Component management handler
  *
  * Actions: add, remove, list
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Components"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_Components"
  */
 
-class EMCP_WB_ComponentsRequest : JsonApiStruct
+class EMCP_WB_ComponentsRequest : EMCP_WB_ProjectRequest
 {
 	string entityName;
 	string action;
@@ -63,7 +63,7 @@ class EMCP_WB_ComponentsResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_Components : NetApiHandler
+class EMCP_WB_Guarded_Components : NetApiHandler
 {
 	//------------------------------------------------------------------------------------------------
 	static IEntitySource FindEntityByName(WorldEditorAPI api, string name)
@@ -87,6 +87,10 @@ class EMCP_WB_Components : NetApiHandler
 	//------------------------------------------------------------------------------------------------
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_ComponentsRequest req = EMCP_WB_ComponentsRequest.Cast(request);
 		EMCP_WB_ComponentsResponse resp = new EMCP_WB_ComponentsResponse();
 		resp.action = req.action;

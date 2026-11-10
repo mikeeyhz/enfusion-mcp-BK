@@ -3,10 +3,10 @@
  *
  * Actions: getCurrentFile, getLine, setLine, insertLine, removeLine, getLinesCount, openFile
  * Uses the ScriptEditor Workbench module.
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_ScriptEditor"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_ScriptEditor"
  */
 
-class EMCP_WB_ScriptEditorRequest : JsonApiStruct
+class EMCP_WB_ScriptEditorRequest : EMCP_WB_ProjectRequest
 {
 	string action;
 	int line;
@@ -45,7 +45,7 @@ class EMCP_WB_ScriptEditorResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_ScriptEditor : NetApiHandler
+class EMCP_WB_Guarded_ScriptEditor : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -54,6 +54,10 @@ class EMCP_WB_ScriptEditor : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_ScriptEditorRequest req = EMCP_WB_ScriptEditorRequest.Cast(request);
 		EMCP_WB_ScriptEditorResponse resp = new EMCP_WB_ScriptEditorResponse();
 		resp.action = req.action;

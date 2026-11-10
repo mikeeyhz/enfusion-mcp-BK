@@ -16,7 +16,7 @@ export function registerWbProjects(server: McpServer, client: WorkbenchClient): 
         name: z
           .string()
           .optional()
-          .describe("Project/addon name to locate (required for locate action), or .gproj file path (required for open action)"),
+          .describe("Project/addon name to locate, or the exact .gproj file path to verify and open"),
       },
     },
     async ({ action, name }) => {
@@ -27,25 +27,19 @@ export function registerWbProjects(server: McpServer, client: WorkbenchClient): 
               content: [
                 {
                   type: "text" as const,
-                  text: "Error: `name` is required for the open action. Provide the .gproj file path or addon name.",
+                  text: "Error: `name` is required for the open action. Provide the exact .gproj file path.",
                 },
               ],
               isError: true,
             };
           }
 
-          const result = await client.call<Record<string, unknown>>("EMCP_WB_EditorControl", {
-            action: "openResource",
-            path: name,
-          });
-
+          const active = await client.ensureRunning(name);
           return {
-            content: [
-              {
-                type: "text" as const,
-                text: `**Project Opened**\n\nLoaded: ${name}${result.message ? `\n${result.message}` : ""}${formatConnectionStatus(client)}`,
-              },
-            ],
+            content: [{
+              type: "text" as const,
+              text: `**Project Opened**\n\nVerified active project: ${active}${formatConnectionStatus(client)}`,
+            }],
           };
         }
 
@@ -82,9 +76,9 @@ export function registerWbProjects(server: McpServer, client: WorkbenchClient): 
 
         const projects = Array.isArray(result.projects)
           ? result.projects
-          : Array.isArray(result.addons)
-            ? result.addons
-            : [];
+          : Array.isArray(result["Loaded Projects"])
+            ? result["Loaded Projects"]
+            : Array.isArray(result.addons) ? result.addons : [];
 
         if (projects.length === 0) {
           return {

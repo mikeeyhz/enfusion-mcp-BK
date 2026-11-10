@@ -1,7 +1,7 @@
 /**
  * EMCP_WB_ReadProps.c - Read resolved property values from a prefab or config
  *
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_ReadProps"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_ReadProps"
  *
  * Reads through the engine rather than by parsing .et/.conf text, so
  * inheritance is already resolved: a value the prefab does not set itself is
@@ -20,7 +20,7 @@
  *      "@SCR_TerrainDragComponent_BK"          (whole component)
  */
 
-class EMCP_WB_ReadPropsRequest : JsonApiStruct
+class EMCP_WB_ReadPropsRequest : EMCP_WB_ProjectRequest
 {
 	string resource;   // ResourceName of the .et/.conf, with or without {GUID}
 	string path;       // navigation path, "" for the root container
@@ -63,7 +63,7 @@ class EMCP_WB_ReadPropsResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_ReadProps : NetApiHandler
+class EMCP_WB_Guarded_ReadProps : NetApiHandler
 {
 	//------------------------------------------------------------------------------------------------
 	//! Component of a given class name on an entity source, or null.
@@ -170,6 +170,10 @@ class EMCP_WB_ReadProps : NetApiHandler
 	//------------------------------------------------------------------------------------------------
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_ReadPropsRequest req = EMCP_WB_ReadPropsRequest.Cast(request);
 		EMCP_WB_ReadPropsResponse resp = new EMCP_WB_ReadPropsResponse();
 		resp.resource = req.resource;

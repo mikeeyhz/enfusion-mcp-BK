@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createServer, type Server, type Socket } from "node:net";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadConfig } from "../../src/config.js";
 import { WorkbenchClient, WorkbenchError } from "../../src/workbench/client.js";
 import {
   decodePascalString,
@@ -62,6 +66,81 @@ function createMockWorkbench(
     close: () => new Promise((res) => server.close(() => res())),
   };
 }
+
+describe("Workbench project binding", () => {
+  let root: string;
+  let intended: string;
+  let other: string;
+  let active: string | undefined;
+  let edits: Array<Record<string, unknown>>;
+  let mock: ReturnType<typeof createMockWorkbench>;
+  let client: WorkbenchClient;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "enfusion-project-"));
+    intended = join(root, "intended.gproj");
+    other = join(root, "other.gproj");
+    writeFileSync(intended, "");
+    writeFileSync(other, "");
+    active = intended;
+    edits = [];
+    mock = createMockWorkbench((func, params) => {
+      if (func === "EMCP_WB_Ping") return { status: "ok", projectFile: active };
+      if (func !== "EMCP_WB_Guarded_ModifyEntity") throw new Error("Unexpected endpoint: " + func);
+      edits.push(params);
+      return { status: "ok" };
+    });
+    client = new WorkbenchClient("127.0.0.1", mock.port, {
+      ...loadConfig(),
+      projectPath: root,
+      defaultMod: undefined,
+    });
+  });
+
+  afterEach(async () => {
+    await mock.close();
+    rmSync(root, { recursive: true });
+  });
+
+  it("refuses to bind or edit when another project is open", async () => {
+    active = other;
+    await expect(client.ensureRunning(intended)).rejects.toThrow(/active project/i);
+    await expect(client.call("EMCP_WB_ModifyEntity")).rejects.toThrow(/active project/i);
+    expect(edits).toEqual([]);
+  });
+
+  it("sends the verified path and blocks edits after the active project changes", async () => {
+    await client.ensureRunning(intended);
+    await client.call("EMCP_WB_ModifyEntity");
+    active = other;
+    await expect(client.call("EMCP_WB_ModifyEntity")).rejects.toThrow(/active project/i);
+    expect(edits).toEqual([{ expectedProjectFile: intended }]);
+  });
+
+  it("blocks edits when the running bridge cannot report its project", async () => {
+    active = undefined;
+    await expect(client.ensureRunning(intended)).rejects.toThrow(/cannot verify/i);
+    await expect(client.call("EMCP_WB_ModifyEntity")).rejects.toThrow(/cannot verify/i);
+    expect(edits).toEqual([]);
+  });
+
+  it("requires an explicit project when no default was configured", async () => {
+    await expect(client.call("EMCP_WB_ModifyEntity")).rejects.toThrow(/wb_launch/i);
+    expect(edits).toEqual([]);
+  });
+
+  it("keeps an in-progress workflow bound to its original project during a switch", async () => {
+    await client.ensureRunning(intended);
+    await client.withProject(async () => {
+      await client.call("EMCP_WB_ModifyEntity");
+      active = other;
+      await client.ensureRunning(other);
+      await expect(client.call("EMCP_WB_ModifyEntity")).rejects.toThrow(/active project/i);
+    });
+    await client.call("EMCP_WB_ModifyEntity");
+    expect(edits).toEqual([{ expectedProjectFile: intended }, { expectedProjectFile: other }]);
+  });
+});
 
 describe("WorkbenchClient", () => {
   let mockServer: ReturnType<typeof createMockWorkbench>;

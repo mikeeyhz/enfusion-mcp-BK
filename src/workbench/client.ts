@@ -9,16 +9,16 @@
  * and retries the original call.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Socket } from "node:net";
-import { existsSync, mkdirSync, copyFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { existsSync, mkdirSync, copyFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { join, resolve, dirname, extname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { encodeRequest, decodeResponse } from "./protocol.js";
 import { logger } from "../utils/logger.js";
 import { findWorkbenchExe } from "../utils/game-paths.js";
 import type { Config } from "../config.js";
-import { generateGproj } from "../templates/gproj.js";
 
 const DEFAULT_CLIENT_ID = "EnfusionMCP";
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -29,10 +29,6 @@ const WORKBENCH_SUBDIR = "Workbench";
 const HANDLER_FOLDER = "EnfusionMCP";
 const LAUNCH_POLL_INTERVAL_MS = 3_000;
 const LAUNCH_TIMEOUT_MS = 90_000;
-/** How long to wait for Workbench to recompile handler scripts after installation. */
-const HANDLER_RECOMPILE_TIMEOUT_MS = 30_000;
-/** Interval between polls while waiting for handler script recompilation. */
-const HANDLER_RECOMPILE_POLL_MS = 2_000;
 
 export type WorkbenchMode = "edit" | "play" | "unknown";
 
@@ -80,6 +76,7 @@ export class WorkbenchError extends Error {
       | "TIMEOUT"
       | "PROTOCOL_ERROR"
       | "API_ERROR"
+      | "PROJECT_MISMATCH"
       | "LAUNCH_FAILED" = "API_ERROR"
   ) {
     super(message);
@@ -88,7 +85,9 @@ export class WorkbenchError extends Error {
 }
 
 export class WorkbenchClient {
-  private launchPromise: Promise<void> | null = null;
+  private launch: { projectFile: string; promise: Promise<string> } | undefined;
+  private selectedProject: string | undefined;
+  private readonly projectScope = new AsyncLocalStorage<string>();
   private _state: WorkbenchState = { connected: false, mode: "unknown", lastUpdated: 0 };
 
   /** Current cached connection state. Updated after every successful call. */
@@ -113,57 +112,28 @@ export class WorkbenchClient {
     options: WorkbenchCallOptions = {}
   ): Promise<T> {
     try {
+      if (this.config && apiFunc.startsWith("EMCP_WB_") && apiFunc !== "EMCP_WB_Ping") {
+        const expected = this.expectedProjectFile();
+        let projectFile: string;
+        try {
+          projectFile = await this.verifyProject(expected);
+        } catch (err) {
+          if (options.skipAutoLaunch || !(err instanceof WorkbenchError) || err.code !== "CONNECTION_REFUSED") {
+            throw err;
+          }
+          projectFile = await this.startProject(expected);
+        }
+        // Use a distinct endpoint so even a legacy Workbench process replacing
+        // the verified one between connections cannot accept this request.
+        apiFunc = apiFunc.replace("EMCP_WB_", "EMCP_WB_Guarded_");
+        // Workbench checks this again inside the handler, before it edits anything.
+        params = { ...params, expectedProjectFile: projectFile };
+      }
       return this.finishCall(await this.rawCall<T>(apiFunc, params, options), options);
     } catch (err) {
-      if (err instanceof WorkbenchError) {
-        if (err.code === "CONNECTION_REFUSED" || err.code === "TIMEOUT" || err.code === "PROTOCOL_ERROR") {
-          this._state = { connected: false, mode: "unknown", lastUpdated: Date.now() };
-        }
-        if (!options.skipAutoLaunch && this.config) {
-          if (err.code === "CONNECTION_REFUSED") {
-            // Workbench not running — install handlers, launch, retry
-            logger.info(`Workbench not running, auto-launching...`);
-            await this.ensureRunning();
-            return this.finishCall(await this.rawCall<T>(apiFunc, params, options), options);
-          }
-          if (
-            err.code === "API_ERROR" &&
-            (err.message.includes("Undefined API func") ||
-              err.message.includes("not existing Net API function"))
-          ) {
-            // Workbench is running but our custom handler scripts aren't compiled.
-            // This happens when the user opened Workbench manually, or when handlers
-            // were cleaned up but Workbench kept running.
-            logger.info(`Handler scripts not loaded in Workbench, recovering...`);
-            await this.recoverMissingHandlers();
-            try {
-              return this.finishCall(await this.rawCall<T>(apiFunc, params, options), options);
-            } catch (retryErr) {
-              // Still unknown after a successful reinstall + recompile. Empirically
-              // this means the handler class is new since Workbench started:
-              // Workbench builds its NET API dispatch table at process start, so a
-              // live recompile updates existing handler bodies but never registers a
-              // new class. It is easy to misdiagnose because the file compiles
-              // cleanly and every previously-registered handler keeps working.
-              if (
-                retryErr instanceof WorkbenchError &&
-                (retryErr.message.includes("Undefined API func") ||
-                  retryErr.message.includes("not existing Net API function"))
-              ) {
-                throw new WorkbenchError(
-                  `Workbench does not expose "${apiFunc}" even after reinstalling and ` +
-                    `recompiling the handler scripts. Workbench registers NET API handlers ` +
-                    `when the process starts, so a handler class that is new since Workbench ` +
-                    `launched will not appear until Workbench is restarted — the script ` +
-                    `compiles cleanly and the other handlers keep working, so this does not ` +
-                    `look like a registration problem. Restart Workbench, then retry.`,
-                  "API_ERROR"
-                );
-              }
-              throw retryErr;
-            }
-          }
-        }
+      if (err instanceof WorkbenchError &&
+          ["CONNECTION_REFUSED", "TIMEOUT", "PROTOCOL_ERROR", "PROJECT_MISMATCH"].includes(err.code)) {
+        this._state = { connected: false, mode: "unknown", lastUpdated: Date.now() };
       }
       throw err;
     }
@@ -187,8 +157,14 @@ export class WorkbenchClient {
     this._state.lastUpdated = Date.now();
     this.extractMode(result);
 
+    const record = result as unknown as Record<string, unknown> | null;
+    if (record?.status === "project_mismatch") {
+      throw new WorkbenchError(
+        `Workbench rejected the request after the active project changed. Active project: ${record.projectFile || "(unknown)"}.`,
+        "PROJECT_MISMATCH"
+      );
+    }
     if (!options.tolerateErrorStatus) {
-      const record = result as unknown as Record<string, unknown> | null;
       if (record && record.status === "error") {
         const message =
           typeof record.message === "string" && record.message.trim() !== ""
@@ -214,30 +190,93 @@ export class WorkbenchClient {
     }
   }
 
-  /**
-   * Ensure Workbench is running. Installs handler scripts, launches exe,
-   * and waits for NET API. Safe to call concurrently — deduplicates launches.
-   * @param gprojPath Optional .gproj file path to open directly (skips launcher).
-   */
-  async ensureRunning(gprojPath?: string): Promise<void> {
+  /** Pin every step of a multi-call tool to the same project. */
+  async withProject<T>(run: () => Promise<T>, projectFile = this.expectedProjectFile()): Promise<T> {
+    return this.projectScope.run(projectFile, run);
+  }
+
+  expectedProjectFile(): string {
+    const pinned = this.projectScope.getStore();
+    if (pinned) return pinned;
+    if (this.selectedProject !== undefined) return this.projectPath(this.selectedProject);
+
+    const config = this.config;
+    if (config?.defaultMod) {
+      const addonDir = join(config.projectPath, config.defaultMod);
+      if (existsSync(addonDir)) {
+        const projects = readdirSync(addonDir, { withFileTypes: true })
+          .filter((entry) => entry.isFile() && extname(entry.name).toLowerCase() === ".gproj");
+        if (projects.length === 1) return this.projectPath(join(addonDir, projects[0].name));
+      }
+    }
+
+    throw new WorkbenchError("Choose a project with wb_launch and its exact .gproj path before using Workbench tools.", "PROJECT_MISMATCH");
+  }
+
+  private projectPath(file: string): string {
+    if (extname(file).toLowerCase() === ".gproj") {
+      try {
+        const path = realpathSync.native(resolve(file));
+        if (statSync(path).isFile()) return path;
+      } catch {
+        // Report a missing or inaccessible project file below.
+      }
+    }
+    throw new WorkbenchError(`Expected an existing .gproj file: ${file}`, "PROJECT_MISMATCH");
+  }
+
+  async verifyProject(expected = this.expectedProjectFile()): Promise<string> {
+    let details: { status?: string; projectFile?: string; mode?: string };
+    try {
+      details = await this.rawCall("EMCP_WB_Ping", {}, { timeout: 3000 });
+    } catch (err) {
+      if (err instanceof WorkbenchError && err.code === "API_ERROR") {
+        throw new WorkbenchError(
+          "Cannot verify the active project. Close Workbench and use wb_launch with the intended .gproj to install the project-aware bridge.",
+          "PROJECT_MISMATCH"
+        );
+      }
+      throw err;
+    }
+    const active = details?.projectFile;
+    if (details?.status !== "ok" || typeof active !== "string" || !isAbsolute(active) ||
+        extname(active).toLowerCase() !== ".gproj") {
+      throw new WorkbenchError(
+        "Cannot verify the active project. Close Workbench and use wb_launch with the intended .gproj to update the bridge.",
+        "PROJECT_MISMATCH"
+      );
+    }
+    if (this.projectPath(active) !== expected) {
+      throw new WorkbenchError(
+        `Active project: ${active}\nRequested project: ${expected}\nSave and close the active project, then retry wb_launch.`,
+        "PROJECT_MISMATCH"
+      );
+    }
+    this.finishCall(details, {});
+    return active;
+  }
+
+  async ensureRunning(gprojPath?: string): Promise<string> {
+    if (gprojPath === undefined) return this.startProject(this.expectedProjectFile());
+    this.selectedProject = resolve(gprojPath);
+    return this.startProject(this.projectPath(this.selectedProject));
+  }
+
+  private async startProject(projectFile: string): Promise<string> {
     if (!this.config) {
       throw new WorkbenchError("No config provided — cannot auto-launch Workbench.", "LAUNCH_FAILED");
     }
-
-    // Deduplicate concurrent calls — all callers await the same promise
-    if (this.launchPromise) {
-      return this.launchPromise;
+    if (this.launch) {
+      if (this.launch.projectFile === projectFile) return this.launch.promise;
+      throw new WorkbenchError("A different project is launching. Wait for it to finish before switching.", "PROJECT_MISMATCH");
     }
-
-    const promise = this.launchWorkbench(gprojPath).finally(() => {
-      // Only clear if this is still the active promise (guards against re-entrant calls)
-      if (this.launchPromise === promise) {
-        this.launchPromise = null;
-      }
-    });
-
-    this.launchPromise = promise;
-    return promise;
+    const promise = this.launchWorkbench(projectFile);
+    this.launch = { projectFile, promise };
+    try {
+      return await promise;
+    } finally {
+      this.launch = undefined;
+    }
   }
 
   /**
@@ -406,24 +445,6 @@ export class WorkbenchClient {
     };
   }
 
-  /**
-   * Remove the standalone EnfusionMCP addon directory if it exists.
-   * This prevents duplicate class name errors when handler scripts are injected
-   * into a user's mod and the standalone folder is also present in the addons dir.
-   */
-  private cleanupStandaloneAddon(): void {
-    const fallbackBase = this.config?.projectPath;
-    if (!fallbackBase) return;
-    const standaloneDir = join(fallbackBase, HANDLER_FOLDER);
-    if (!existsSync(standaloneDir)) return;
-    try {
-      rmSync(standaloneDir, { recursive: true, force: true });
-      logger.info(`Removed leftover standalone addon: ${standaloneDir}`);
-    } catch (e) {
-      logger.warn(`Failed to remove standalone addon: ${e}`);
-    }
-  }
-
   toString(): string {
     return `WorkbenchClient(${this.host}:${this.port})`;
   }
@@ -446,90 +467,13 @@ export class WorkbenchClient {
     }
   }
 
-  /**
-   * Recover from "not existing Net API function" errors.
-   * Workbench is running but our custom handler scripts aren't compiled.
-   * Installs handlers into the mod directory and waits for Workbench to
-   * auto-recompile them — without killing the running Workbench process.
-   *
-   * Previous behaviour killed Workbench with taskkill, which broke other
-   * tools (e.g. the Enfusion Blender plugin) that share the same NET API.
-   */
-  private async recoverMissingHandlers(): Promise<void> {
-    if (!this.config) {
-      throw new WorkbenchError("No config provided — cannot recover handlers.", "LAUNCH_FAILED");
+  private async launchWorkbench(projectFile: string): Promise<string> {
+    try {
+      return await this.verifyProject(projectFile);
+    } catch (err) {
+      if (!(err instanceof WorkbenchError) || err.code !== "CONNECTION_REFUSED") throw err;
     }
 
-    // Inject into the currently-open mod (same logic as launchWorkbench).
-    const recoveryGproj = this.findFallbackGproj();
-    if (recoveryGproj) {
-      this.installHandlerScripts(dirname(recoveryGproj), true);
-      this.cleanupStandaloneAddon();
-    } else {
-      this.installHandlerScripts(undefined, true);
-    }
-
-    // Wait for Workbench to detect the new files and recompile scripts.
-    // Workbench watches its script directories and recompiles automatically.
-    //
-    // The probe is EMCP_WB_Ping, which proves only that SOME handler responds.
-    // That is the right signal for the case this recovery exists for — handlers
-    // missing entirely, so Ping is missing too. It is NOT proof that the handler
-    // the caller wanted is registered: if Ping was already registered and only a
-    // NEWLY ADDED handler class is missing, this returns success on the first poll
-    // and the caller's retry then fails anyway. call() detects that and explains it
-    // rather than surfacing a bare "Undefined API func".
-    logger.info("Handler scripts installed. Waiting for Workbench to recompile...");
-    const deadline = Date.now() + HANDLER_RECOMPILE_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, HANDLER_RECOMPILE_POLL_MS));
-      if (await this.ping()) {
-        logger.info("Handler scripts compiled and loaded.");
-        return;
-      }
-    }
-
-    throw new WorkbenchError(
-      `Handler scripts were installed but Workbench did not recompile them within ` +
-        `${HANDLER_RECOMPILE_TIMEOUT_MS / 1000}s. Try recompiling scripts manually in ` +
-        `Workbench (Plugins > Reload Scripts) or restart Workbench.`,
-      "LAUNCH_FAILED"
-    );
-  }
-
-  private async launchWorkbench(gprojPath?: string): Promise<void> {
-    // 1. Check if already running (maybe it came up between the failed call and now)
-    if (await this.ping()) {
-      logger.info("Workbench is already running.");
-      return;
-    }
-
-    // 2. Resolve the target .gproj and inject handler scripts into that mod.
-    //    Handler scripts must compile as part of the opened project — Workbench
-    //    only compiles the active project and its declared dependencies, NOT every
-    //    addon folder in the project directory.  A standalone sibling addon will
-    //    never be compiled unless the user's project explicitly depends on it.
-    let resolvedGproj = gprojPath || this.findFallbackGproj();
-    if (resolvedGproj) {
-      this.installHandlerScripts(dirname(resolvedGproj));
-      // Remove any leftover standalone addon to prevent duplicate class errors.
-      // If a previous session created {projectPath}/EnfusionMCP/ it would be
-      // picked up as a sibling addon and cause compile-time class name conflicts.
-      this.cleanupStandaloneAddon();
-    } else {
-      // No project found — fall back to standalone addon as last resort and open it
-      // directly so its handlers at least compile (user's project won't be open).
-      this.installHandlerScripts();
-      const fallbackBase = this.config?.projectPath;
-      if (fallbackBase) {
-        const standaloneGproj = join(fallbackBase, HANDLER_FOLDER, `${HANDLER_FOLDER}.gproj`);
-        if (existsSync(standaloneGproj)) {
-          resolvedGproj = standaloneGproj;
-        }
-      }
-    }
-
-    // 3. Find executable
     const exePath = findWorkbenchExe(this.config!.workbenchPath);
     if (!exePath) {
       const wbPath = this.config?.workbenchPath ?? "(not configured)";
@@ -542,11 +486,8 @@ export class WorkbenchClient {
       );
     }
 
-    // 4. Spawn with -gproj to skip the launcher
-    const args: string[] = [];
-    if (resolvedGproj) {
-      args.push("-gproj", resolvedGproj);
-    }
+    this.installHandlerScripts(dirname(projectFile));
+    const args = ["-gproj", projectFile];
 
     // Use the game install directory as CWD so Workbench finds base game addons
     // (data/ArmaReforger.gproj with GUID 58D0FB3206B6F859) via ./addons resolution.
@@ -560,89 +501,21 @@ export class WorkbenchClient {
     });
     proc.unref();
 
-    // 5. Wait for NET API — track the last error type so the timeout message is actionable
     const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
-    let lastErrorCode: WorkbenchError["code"] | undefined;
     while (Date.now() < deadline) {
       try {
-        await this.rawCall("EMCP_WB_Ping", {}, { timeout: 3000, skipAutoLaunch: true });
-        this._state.connected = true;
-        this._state.lastUpdated = Date.now();
-        logger.info("Workbench NET API is responding.");
-        return;
+        return await this.verifyProject(projectFile);
       } catch (err) {
-        if (err instanceof WorkbenchError) {
-          lastErrorCode = err.code;
-          logger.debug(`Workbench poll (${err.code}): ${err.message}`);
-        }
+        if (err instanceof WorkbenchError && err.code === "PROJECT_MISMATCH" &&
+            err.message.startsWith("Active project:")) throw err;
       }
       await new Promise((r) => setTimeout(r, LAUNCH_POLL_INTERVAL_MS));
     }
 
-    // Build a specific diagnostic based on what was failing at timeout.
-    // CONNECTION_REFUSED = NET API port never opened → NET API likely disabled.
-    // API_ERROR = NET API is up but EMCP_WB_Ping isn't registered → handler scripts
-    //             didn't compile (project has script errors, or wrong mod directory).
-    let hint: string;
-    if (lastErrorCode === "API_ERROR") {
-      hint =
-        `Workbench NET API responded but handler scripts did not load. ` +
-        `Check for script compilation errors in Workbench (Script Editor). ` +
-        `Fix any errors in the project's scripts so the EnfusionMCP handlers can compile, ` +
-        `then try again.`;
-    } else {
-      hint =
-        `NET API port never responded. Ensure NET API is enabled in Workbench: ` +
-        `File > Options > General > Net API (checkbox must be on).`;
-    }
-
     throw new WorkbenchError(
-      `Workbench launched but did not connect within ${LAUNCH_TIMEOUT_MS / 1000}s.\n\n${hint}`,
+      "Workbench launched but its active .gproj could not be verified. Check that Net API is enabled and the bridge scripts compile.",
       "LAUNCH_FAILED"
     );
-  }
-
-  /**
-   * Find a .gproj to pass via -gproj so Workbench skips the launcher.
-   * Prefers config.defaultMod if set; otherwise picks first addon found.
-   * Scans for any .gproj in each addon folder (name need not match folder).
-   */
-  private findFallbackGproj(): string | null {
-    const findGprojInDir = (dir: string): string | null => {
-      try {
-        for (const f of readdirSync(dir, { withFileTypes: true })) {
-          if (!f.isDirectory() && f.name.endsWith(".gproj")) {
-            return join(dir, f.name);
-          }
-        }
-      } catch { /* ignore */ }
-      return null;
-    };
-
-    try {
-      const addonsDir = this.config?.projectPath;
-      if (!addonsDir || !existsSync(addonsDir)) return null;
-
-      // Prefer the configured default mod over alphabetical first-pick
-      const preferred = this.config?.defaultMod;
-      if (preferred) {
-        const gprojPath = findGprojInDir(join(addonsDir, preferred));
-        if (gprojPath) {
-          logger.info(`Using defaultMod gproj to skip launcher: ${gprojPath}`);
-          return gprojPath;
-        }
-      }
-
-      for (const entry of readdirSync(addonsDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const gprojPath = findGprojInDir(join(addonsDir, entry.name));
-        if (gprojPath) {
-          logger.info(`Using fallback gproj to skip launcher: ${gprojPath}`);
-          return gprojPath;
-        }
-      }
-    } catch { /* ignore */ }
-    return null;
   }
 
   /**
@@ -678,62 +551,17 @@ export class WorkbenchClient {
     return null;
   }
 
-  /**
-   * Copy handler scripts into a mod directory so they compile as part of that mod.
-   * If no modDir given, installs to default project path (standalone, less useful).
-   */
-  private installHandlerScripts(modDir?: string, force = false): void {
+  /** Refresh the bridge before launching the explicitly selected project. */
+  private installHandlerScripts(modDir: string): void {
     const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
     const bundledDir = join(packageRoot, "mod", "Scripts", "WorkbenchGame", HANDLER_FOLDER);
-    if (!existsSync(bundledDir)) {
-      logger.warn("Bundled handler scripts not found in package.");
-      return;
+    const targetDir = join(modDir, "Scripts", "WorkbenchGame", HANDLER_FOLDER);
+    const files = readdirSync(bundledDir).filter((file) => file.endsWith(".c"));
+    mkdirSync(targetDir, { recursive: true });
+    for (const file of files) {
+      copyFileSync(join(bundledDir, file), join(targetDir, file));
     }
-
-    const fallbackBase = this.config?.projectPath;
-    if (!modDir && !fallbackBase) {
-      logger.warn("No modDir or projectPath configured — cannot install handler scripts.");
-      return;
-    }
-    const isFallback = !modDir;
-    const targetBase = modDir || join(fallbackBase!, HANDLER_FOLDER);
-    const targetScriptsDir = join(targetBase, "Scripts", "WorkbenchGame", HANDLER_FOLDER);
-
-    // Already installed? Skip unless force-reinstalling (e.g. recovery after missing handlers)
-    if (!force && existsSync(join(targetScriptsDir, "EMCP_WB_Ping.c"))) {
-      return;
-    }
-
-
-    logger.info(`Installing handler scripts to ${targetScriptsDir}`);
-    mkdirSync(targetScriptsDir, { recursive: true });
-
-    const files = readdirSync(bundledDir).filter((f) => f.endsWith(".c"));
-    try {
-      for (const file of files) {
-        copyFileSync(join(bundledDir, file), join(targetScriptsDir, file));
-      }
-    } catch (e) {
-      // Partial installation — clean up to avoid broken state on next attempt
-      logger.error(`Failed to install handler scripts, rolling back: ${e}`);
-      try {
-        rmSync(targetScriptsDir, { recursive: true, force: true });
-      } catch { /* best-effort cleanup */ }
-      throw e;
-    }
-
-    logger.info(`Installed ${files.length} handler scripts.`);
-
-    // When using the standalone fallback path, also write a .gproj so Workbench
-    // treats the directory as a loadable addon and compiles the handler scripts.
-    if (isFallback) {
-      const gprojPath = join(targetBase, `${HANDLER_FOLDER}.gproj`);
-      if (!existsSync(gprojPath)) {
-        const gprojContent = generateGproj({ name: HANDLER_FOLDER, title: "EnfusionMCP Handlers" });
-        writeFileSync(gprojPath, gprojContent, "utf-8");
-        logger.info(`Created standalone addon .gproj at ${gprojPath}`);
-      }
-    }
+    logger.info(`Installed ${files.length} handler scripts in ${targetDir}.`);
   }
 
   /**

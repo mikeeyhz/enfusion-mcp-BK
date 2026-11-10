@@ -5,6 +5,7 @@ import {
   writeFileSync,
   mkdirSync,
   existsSync,
+  realpathSync,
 } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "../config.js";
@@ -52,7 +53,7 @@ export function registerGameDuplicate(
           .optional()
           .describe(
             "Addon folder name under ENFUSION_PROJECT_PATH (e.g., 'MyMod'). " +
-            "If omitted, the first addon found in the project path is used."
+            "If omitted, use the active Workbench project when registering, or the configured default addon when offline."
           ),
         flatten: z
           .boolean()
@@ -112,20 +113,19 @@ export function registerGameDuplicate(
         };
       }
 
-      // Resolve destination addon directory
-      const addonDir = resolveAddonDir(config.projectPath, modName ?? config.defaultMod);
-      if (!addonDir) {
+      const projectFile = register ? client.expectedProjectFile() : undefined;
+      const offlineMod = modName ?? config.defaultMod;
+      const addonDir = projectFile && !modName
+        ? dirname(projectFile)
+        : offlineMod ? resolveAddonDir(config.projectPath, offlineMod) : null;
+      if (!addonDir || (projectFile && realpathSync.native(addonDir) !== dirname(projectFile))) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `Could not find addon directory. ` +
-                (modName
-                  ? `'${modName}' not found under ${config.projectPath}`
-                  : `No addons found under ${config.projectPath}`) +
-                `. Provide modName matching the addon folder name.`,
-            },
-          ],
+          content: [{
+            type: "text" as const,
+            text: register
+              ? "The destination addon must match the verified Workbench project."
+              : "Provide modName matching an addon folder or configure ENFUSION_DEFAULT_MOD.",
+          }],
           isError: true,
         };
       }
@@ -254,6 +254,7 @@ export function registerGameDuplicate(
       finalContent = finalContent.replace(/^(\s*ID\s+")[0-9A-Fa-f]{16}(")/m, `$1${newEntityId}$2`);
 
       try {
+        if (projectFile) await client.verifyProject(projectFile);
         mkdirSync(dirname(absDestPath), { recursive: true });
         writeFileSync(absDestPath, finalContent, "utf-8");
       } catch (e) {
@@ -270,11 +271,11 @@ export function registerGameDuplicate(
           // The copy has already succeeded by this point — registration is a bonus
           // step, so its failure is reported as a warning rather than failing the
           // whole duplicate. Handled explicitly below, hence tolerateErrorStatus.
-          const regResp = await client.call<{ status: string; message?: string }>(
+          const regResp = await client.withProject(() => client.call<{ status: string; message?: string }>(
             "EMCP_WB_Resources",
             { action: "register", path: absDestPath, buildRuntime: false },
             { timeout: 30000, tolerateErrorStatus: true }
-          );
+          ), projectFile);
 
           const guidNote = regResp.status === "ok"
             ? `Registered with Workbench — a new GUID has been assigned.`

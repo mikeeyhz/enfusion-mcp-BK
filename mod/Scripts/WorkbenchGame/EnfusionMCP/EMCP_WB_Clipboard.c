@@ -3,10 +3,10 @@
  *
  * Actions: copy, cut, paste, pasteAtCursor, duplicate, hasCopied
  * All operate on the current editor selection.
- * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Clipboard"
+ * Called via NET API TCP protocol: APIFunc = "EMCP_WB_Guarded_Clipboard"
  */
 
-class EMCP_WB_ClipboardRequest : JsonApiStruct
+class EMCP_WB_ClipboardRequest : EMCP_WB_ProjectRequest
 {
 	string action;
 
@@ -32,7 +32,7 @@ class EMCP_WB_ClipboardResponse : JsonApiStruct
 	}
 }
 
-class EMCP_WB_Clipboard : NetApiHandler
+class EMCP_WB_Guarded_Clipboard : NetApiHandler
 {
 	override JsonApiStruct GetRequest()
 	{
@@ -41,6 +41,10 @@ class EMCP_WB_Clipboard : NetApiHandler
 
 	override JsonApiStruct GetResponse(JsonApiStruct request)
 	{
+		JsonApiStruct projectError = EMCP_WB_ProjectRequest.Check(request);
+		if (projectError)
+			return projectError;
+
 		EMCP_WB_ClipboardRequest req = EMCP_WB_ClipboardRequest.Cast(request);
 		EMCP_WB_ClipboardResponse resp = new EMCP_WB_ClipboardResponse();
 		resp.action = req.action;

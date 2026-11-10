@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { existsSync, readdirSync } from "node:fs";
 import type { Config } from "../config.js";
 import type { WorkbenchClient } from "../workbench/client.js";
@@ -15,11 +15,11 @@ export function registerWbLaunch(
     "wb_launch",
     {
       description:
-        "Launch Arma Reforger Workbench (Arma Reforger Tools). Automatically copies handler scripts " +
+        "Launch Workbench for the specified .gproj and verify it is the active project. Copies handler scripts " +
         "into the target mod's Scripts/WorkbenchGame/ directory (so NET API handlers compile as part " +
         "of the mod), starts the Workbench executable, and waits for the NET API to become available. " +
-        "All other wb_* tools call this automatically if Workbench is not running, so you rarely need to " +
-        "call this directly. IMPORTANT: When done working with Workbench, call wb_cleanup to remove the " +
+        "If a different project is already open, save and close it before retrying. " +
+        "When done working with Workbench, call wb_cleanup to remove the " +
         "handler scripts from the mod before the user publishes.",
       inputSchema: {
         gprojPath: z
@@ -28,44 +28,18 @@ export function registerWbLaunch(
           .describe(
             "Path to a .gproj file to open directly. Skips the Workbench launcher screen and goes straight " +
             "into the World Editor. Handler scripts are copied into the mod so all wb_* tools work. " +
-            "If omitted, Workbench opens to its launcher."
+            "If omitted, use the previously requested project or the uniquely configured default addon."
           ),
       },
     },
     async ({ gprojPath }) => {
       try {
-        // Remember which addon was requested so other tools default to it
-        if (gprojPath) {
-          config.defaultMod = basename(dirname(resolve(gprojPath)));
-        }
-
-        const alreadyRunning = await client.ping();
-        if (alreadyRunning) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `**Workbench Already Running** — NET API is responding. All \`wb_*\` tools are available.${formatConnectionStatus(client)}`,
-              },
-            ],
-          };
-        }
-
-        await client.ensureRunning(gprojPath);
-
-        const modDir = gprojPath ? dirname(resolve(gprojPath)) : null;
-        const note = modDir
-          ? `\n\nNote: Handler scripts were copied to ${modDir}/Scripts/WorkbenchGame/EnfusionMCP/. ` +
-            `Call **wb_cleanup** with the mod directory path when done to remove them before publishing.`
-          : "";
-
+        const active = await client.ensureRunning(gprojPath);
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `**Workbench Ready** — Launched, handler scripts installed, NET API responding. All \`wb_*\` tools are available.${note}${formatConnectionStatus(client)}`,
-            },
-          ],
+          content: [{
+            type: "text" as const,
+            text: `**Workbench Ready**\n\nVerified active project: ${active}${formatConnectionStatus(client)}`,
+          }],
         };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
